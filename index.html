@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>Scooter HUD</title>
+<style>
+  :root{
+    --hud:#3dff74; --hud-dim:#1d7a3a; --warn:#ffb020; --bad:#ff4a3d; --txt:#eafff0;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#000;color:var(--hud);overflow:hidden;
+    font-family:Roboto,"Roboto Condensed",system-ui,sans-serif;user-select:none;-webkit-user-select:none;touch-action:none}
+  #app{display:flex;flex-direction:column;height:100dvh;
+    padding:env(safe-area-inset-top) 2vw env(safe-area-inset-bottom)}
+  #top{flex:0 0 5vh;display:flex;align-items:center;justify-content:space-between;
+    font-size:min(3.6vw,2.4vh);font-weight:700;letter-spacing:.05em;padding:0 1vw}
+  #top span{display:flex;align-items:center;gap:1.4vw}
+  .dot{width:2.6vw;height:2.6vw;max-width:14px;max-height:14px;border-radius:50%;background:var(--bad)}
+  #speedBox{flex:0 0 26vh;display:flex;align-items:flex-end;justify-content:center;gap:2vw;line-height:.8}
+  #speed{font-size:min(46vw,26vh);font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.04em;
+    color:var(--txt);text-shadow:0 0 18px rgba(61,255,116,.45)}
+  #speed.stale{color:var(--hud-dim);text-shadow:none}
+  #unit{font-size:min(5.5vw,3.2vh);font-weight:700;padding-bottom:1.6vh}
+  #hudWrap{flex:1 1 auto;position:relative;min-height:0}
+  #hud{position:absolute;inset:0;width:100%;height:100%}
+  #max{flex:0 0 9.5vh;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:1.5vw;margin:.6vh 0}
+  .cell{border:2px solid var(--hud-dim);border-radius:10px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;line-height:1}
+  .cell b{font-size:min(3.2vw,1.8vh);letter-spacing:.12em;color:var(--hud);font-weight:700}
+  .cell i{font-style:normal;font-size:min(7.5vw,4.4vh);font-weight:800;color:var(--txt);
+    font-variant-numeric:tabular-nums;margin-top:.5vh}
+  .cell i small{font-size:.45em;color:var(--hud)}
+  #zero{flex:0 0 13vh;position:relative;overflow:hidden;border:4px solid var(--hud);border-radius:18px;
+    margin-bottom:1vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:#031a0a;color:var(--hud)}
+  #zero .lbl{position:relative;font-size:min(10vw,6vh);font-weight:900;letter-spacing:.18em}
+  #zero .sub{position:relative;font-size:min(3.4vw,2vh);font-weight:700;letter-spacing:.08em;margin-top:.4vh}
+  #zero .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--hud);opacity:.35}
+  #zero.need{border-color:var(--warn);color:var(--warn);animation:pulse 1.4s infinite}
+  #zero.need .fill{background:var(--warn)}
+  @keyframes pulse{50%{background:#2a1c00}}
+  #toast{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);background:var(--hud);color:#000;
+    font-weight:900;font-size:8vw;padding:2vh 8vw;border-radius:16px;opacity:0;transition:opacity .25s;pointer-events:none}
+  #toast.on{opacity:1}
+  #start{position:fixed;inset:0;background:#000;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:3vh;text-align:center;padding:8vw;z-index:10}
+  #start button{font:inherit;font-size:8vw;font-weight:900;letter-spacing:.1em;color:#000;background:var(--hud);
+    border:0;border-radius:20px;padding:4vh 10vw}
+  #start p{color:var(--txt);font-size:4vw;line-height:1.4;margin:0;opacity:.8}
+  #start .err{color:var(--warn)}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <span><i class="dot" id="gpsDot"></i><span id="gpsTxt">GPS --</span></span>
+    <span id="zState">TILT --</span>
+    <span id="clock">--:--</span>
+  </div>
+
+  <div id="speedBox"><div id="speed" class="stale">--</div><div id="unit">km/h</div></div>
+
+  <div id="hudWrap"><canvas id="hud"></canvas></div>
+
+  <div id="max" title="Hold 2 s to reset">
+    <div class="cell"><b>MAX SPEED</b><i id="mSpd">0.0</i></div>
+    <div class="cell"><b>MAX ACC</b><i id="mAcc">0.00<small>g</small></i></div>
+    <div class="cell"><b>MAX BRAKE</b><i id="mBrk">0.00<small>g</small></i></div>
+  </div>
+
+  <div id="zero"><div class="fill" id="zFill"></div><div class="lbl">ZERO</div><div class="sub" id="zSub">HOLD TO LEVEL TILT</div></div>
+</div>
+
+<div id="toast">TILT ZEROED</div>
+
+<div id="start">
+  <div style="font-size:10vw;font-weight:900;letter-spacing:.1em">SCOOTER HUD</div>
+  <button id="go">START</button>
+  <p>Allow location when asked.<br>Mount the phone, stand the scooter upright,<br>then hold <b>ZERO</b>.</p>
+  <p class="err" id="startErr"></p>
+</div>
+
+<script>
+"use strict";
+const D2R = Math.PI/180, R2D = 180/Math.PI, G = 9.80665;
+const $ = id => document.getElementById(id);
+const DEMO = /[?&]demo/.test(location.search);
+
+/* ---------- vector helpers ---------- */
+const dot = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm = a=>{const l=Math.hypot(a[0],a[1],a[2])||1;return [a[0]/l,a[1]/l,a[2]/l];};
+
+/* ---------- state ---------- */
+const S = {
+  up:[0,1,0],            // world "up" in phone coordinates (live, smoothed)
+  frame:null,            // {up,right,fwd} captured at ZERO, fixed to the scooter
+  zeroedThisRun:false,
+  lean:0, pitch:0,       // degrees, + = lean right / nose up
+  aF:0,                  // forward acceleration, g (smoothed)
+  speed:null, lastFixT:0, gpsAcc:null, lastPos:null,
+  maxSpd:0, maxAcc:0, maxBrk:0
+};
+
+function makeFrame(up){
+  up = norm(up);
+  const x=[1,0,0], k=dot(x,up);
+  const right = norm([x[0]-k*up[0], x[1]-k*up[1], x[2]-k*up[2]]);
+  const fwd = cross(up,right);           // points out of the back of the phone = scooter forward
+  return {up,right,fwd};
+}
+// Zero offset survives restarts (the phone may still be in the mount); max values do not.
+try{ const z=JSON.parse(localStorage.getItem("hudZero")); if(z&&z.length===3) S.frame=makeFrame(z); }catch(e){}
+if(!S.frame) S.frame=makeFrame([0,1,0]);  // default: phone perfectly upright
+
+/* ---------- tilt from fused orientation ---------- */
+let lastOriT=0;
+function onOrient(e){
+  if(e.beta==null||e.gamma==null) return;
+  const b=e.beta*D2R, g=e.gamma*D2R;
+  const u=[-Math.cos(b)*Math.sin(g), Math.sin(b), Math.cos(b)*Math.cos(g)];
+  const k=0.25;  // light smoothing
+  S.up=norm([S.up[0]+(u[0]-S.up[0])*k, S.up[1]+(u[1]-S.up[1])*k, S.up[2]+(u[2]-S.up[2])*k]);
+  lastOriT=performance.now();
+  updateTilt();
+}
+function updateTilt(){
+  const f=S.frame,u=S.up, uu=dot(u,f.up);
+  S.lean  = Math.atan2(-dot(u,f.right), uu)*R2D;
+  S.pitch = Math.atan2( dot(u,f.fwd),   uu)*R2D;
+}
+
+/* ---------- forward acceleration ---------- */
+let lastMotT=0;
+function onMotion(e){
+  const now=performance.now(), dt=lastMotT?Math.min(.2,(now-lastMotT)/1000):.016; lastMotT=now;
+  let lin;
+  const a=e.acceleration, ag=e.accelerationIncludingGravity;
+  if(a && a.x!=null) lin=[a.x,a.y,a.z];
+  else if(ag && ag.x!=null){
+    if(now-lastOriT>500){ // no orientation events: estimate tilt from gravity (slow filter)
+      const k=Math.min(1,dt/1.5);
+      S.up=norm([S.up[0]+(ag.x/G-S.up[0])*k, S.up[1]+(ag.y/G-S.up[1])*k, S.up[2]+(ag.z/G-S.up[2])*k]);
+      updateTilt();
+    }
+    lin=[ag.x-G*S.up[0], ag.y-G*S.up[1], ag.z-G*S.up[2]];
+  } else return;
+  const af=dot(lin,S.frame.fwd)/G;
+  const k=1-Math.exp(-dt/0.35);         // ~0.35 s smoothing kills pothole spikes
+  S.aF+= (af-S.aF)*k;
+  if(S.speed!=null && S.speed>4 && now-S.lastFixT<3000){   // only record while riding
+    if(S.aF>S.maxAcc) S.maxAcc=S.aF;
+    if(-S.aF>S.maxBrk) S.maxBrk=-S.aF;
+  }
+}
+
+/* ---------- GPS speed ---------- */
+function haversine(a,b){
+  const R=6371000, dLa=(b.latitude-a.latitude)*D2R, dLo=(b.longitude-a.longitude)*D2R;
+  const s=Math.sin(dLa/2)**2+Math.cos(a.latitude*D2R)*Math.cos(b.latitude*D2R)*Math.sin(dLo/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+function onPos(p){
+  const c=p.coords; let v=c.speed;          // m/s
+  if((v==null||isNaN(v)) && S.lastPos){
+    const dt=(p.timestamp-S.lastPos.t)/1000;
+    if(dt>0.3) v=haversine(S.lastPos.c,c)/dt;
+  }
+  S.lastPos={c,t:p.timestamp};
+  S.gpsAcc=c.accuracy; S.lastFixT=performance.now();
+  if(v==null||isNaN(v)) return;
+  let kmh=v*3.6; if(kmh<2) kmh=0;           // dead band against GPS jitter at standstill
+  S.speed=kmh;
+  if(c.accuracy<=25 && kmh<120 && kmh>S.maxSpd) S.maxSpd=kmh;
+}
+function onPosErr(e){ $("gpsTxt").textContent = e.code===1?"GPS DENIED":"GPS ERR"; }
+
+/* ---------- ZERO (hold) ---------- */
+const HOLD_MS=1200;
+let holdStart=0, holdRaf=0;
+function zeroDown(e){ e.preventDefault(); holdStart=performance.now(); holdRaf=requestAnimationFrame(holdTick); }
+function zeroUp(){ cancelAnimationFrame(holdRaf); holdStart=0; $("zFill").style.width="0"; }
+function holdTick(){
+  if(!holdStart) return;
+  const p=(performance.now()-holdStart)/HOLD_MS;
+  $("zFill").style.width=Math.min(100,p*100)+"%";
+  if(p>=1){ doZero(); zeroUp(); return; }
+  holdRaf=requestAnimationFrame(holdTick);
+}
+function doZero(){
+  S.frame=makeFrame(S.up); S.aF=0; S.zeroedThisRun=true; updateTilt();
+  try{ localStorage.setItem("hudZero",JSON.stringify(S.frame.up)); }catch(e){}
+  if(navigator.vibrate) navigator.vibrate([60,60,60]);
+  const t=$("toast"); t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),900);
+}
+$("zero").addEventListener("pointerdown",zeroDown);
+["pointerup","pointercancel","pointerleave"].forEach(ev=>$("zero").addEventListener(ev,zeroUp));
+
+/* hold the max panel 2 s to clear max values mid-day (they also clear every app start) */
+let maxT=0;
+$("max").addEventListener("pointerdown",()=>{ maxT=setTimeout(()=>{S.maxSpd=S.maxAcc=S.maxBrk=0; if(navigator.vibrate)navigator.vibrate(80);},2000); });
+["pointerup","pointercancel","pointerleave"].forEach(ev=>$("max").addEventListener(ev,()=>clearTimeout(maxT)));
+
+/* ---------- keep screen on ---------- */
+let wakeLock=null;
+async function keepAwake(){ try{ if("wakeLock" in navigator && document.visibilityState==="visible") wakeLock=await navigator.wakeLock.request("screen"); }catch(e){} }
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") keepAwake(); });
+
+/* ---------- start ---------- */
+$("go").addEventListener("click", async ()=>{
+  try{
+    if(typeof DeviceMotionEvent!=="undefined" && DeviceMotionEvent.requestPermission) await DeviceMotionEvent.requestPermission();
+    if(typeof DeviceOrientationEvent!=="undefined" && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission();
+  }catch(e){}
+  if(!window.isSecureContext && !DEMO){ $("startErr").textContent="Needs HTTPS (open it from your GitHub Pages link)."; }
+  try{ await document.documentElement.requestFullscreen({navigationUI:"hide"}); }catch(e){}
+  try{ await screen.orientation.lock("portrait"); }catch(e){}
+  keepAwake();
+  if(DEMO){ startDemo(); }
+  else{
+    window.addEventListener("deviceorientation",onOrient);
+    window.addEventListener("devicemotion",onMotion);
+    if(navigator.geolocation) navigator.geolocation.watchPosition(onPos,onPosErr,{enableHighAccuracy:true,maximumAge:0,timeout:15000});
+    else $("gpsTxt").textContent="NO GPS";
+  }
+  $("start").style.display="none";
+});
+
+/* ---------- demo mode (?demo) for testing on a desk ---------- */
+function startDemo(){
+  const t0=performance.now();
+  setInterval(()=>{
+    const t=(performance.now()-t0)/1000;
+    S.lean=18*Math.sin(t*.6); S.pitch=6*Math.sin(t*.23);
+    S.aF=.35*Math.sin(t*.4);
+    S.speed=Math.max(0,22+12*Math.sin(t*.15)); S.gpsAcc=4; S.lastFixT=performance.now();
+    S.maxSpd=Math.max(S.maxSpd,S.speed); S.maxAcc=Math.max(S.maxAcc,S.aF); S.maxBrk=Math.max(S.maxBrk,-S.aF);
+    S.zeroedThisRun=true;
+  },50);
+  updateTilt=()=>{};
+}
+
+/* ---------- HUD drawing ---------- */
+const cv=$("hud"), ctx=cv.getContext("2d");
+let W=0,H=0;
+function resize(){
+  const r=cv.getBoundingClientRect(), d=window.devicePixelRatio||1;
+  W=r.width; H=r.height; cv.width=Math.round(W*d); cv.height=Math.round(H*d);
+  ctx.setTransform(d,0,0,d,0,0);
+}
+new ResizeObserver(resize).observe(cv);
+
+const COL="#3dff74", DIM="#1d7a3a", TXT="#eafff0", WARN="#ffb020";
+function font(px,w=700){ return `${w} ${px}px Roboto,"Roboto Condensed",system-ui,sans-serif`; }
+
+function drawTape(o){
+  // o: x (outer edge), w, side ('L'|'R'), cy, half (px), value, span (units each side), minor, isLabel(fn), fmt(fn), title, boxText, color, sub
+  const inner = o.side==='L' ? o.x+o.w : o.x;
+  const dir = o.side==='L' ? -1 : 1;           // ticks grow away from the centre
+  const ppu = o.half/o.span;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(o.x-2, o.cy-o.half, o.w+4, o.half*2); ctx.clip();
+  ctx.strokeStyle=COL; ctx.fillStyle=COL; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(inner,o.cy-o.half); ctx.lineTo(inner,o.cy+o.half); ctx.stroke();
+  const k0=Math.ceil((o.value-o.span)/o.minor), k1=Math.floor((o.value+o.span)/o.minor);
+  ctx.font=font(Math.max(12,o.w*.2)); ctx.textBaseline="middle";
+  ctx.textAlign = o.side==='L' ? "right" : "left";
+  for(let k=k0;k<=k1;k++){
+    const v=k*o.minor, y=o.cy-(v-o.value)*ppu, major=o.isLabel(k);
+    const len=major? o.w*.28 : o.w*.14;
+    ctx.beginPath(); ctx.moveTo(inner,y); ctx.lineTo(inner+dir*len,y); ctx.stroke();
+    if(major) ctx.fillText(o.fmt(v), inner+dir*(len+4), y);
+  }
+  ctx.restore();
+  // value box with pointer notch
+  const bh=Math.max(34,o.w*.42), bw=o.w+4, bx=o.x-2, by=o.cy-bh/2;
+  ctx.fillStyle="#000"; ctx.strokeStyle=o.color||COL; ctx.lineWidth=3;
+  ctx.beginPath();
+  if(o.side==='L'){ ctx.moveTo(bx,by); ctx.lineTo(bx+bw,by); ctx.lineTo(bx+bw+10,o.cy); ctx.lineTo(bx+bw,by+bh); ctx.lineTo(bx,by+bh); }
+  else{ ctx.moveTo(bx+bw,by); ctx.lineTo(bx,by); ctx.lineTo(bx-10,o.cy); ctx.lineTo(bx,by+bh); ctx.lineTo(bx+bw,by+bh); }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=o.color||TXT; ctx.font=font(bh*.58,800); ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillText(o.boxText, bx+bw/2, o.cy+1);
+  // title and sub-label
+  ctx.fillStyle=COL; ctx.font=font(Math.max(11,o.w*.19)); ctx.textBaseline="bottom";
+  ctx.fillText(o.title, o.x+o.w/2, o.cy-o.half-4);
+  if(o.sub){ ctx.textBaseline="top"; ctx.fillText(o.sub, o.x+o.w/2, o.cy+o.half+4); }
+}
+
+function drawHUD(){
+  ctx.clearRect(0,0,W,H);
+  if(!W||!H) return;
+  const tapeW=Math.max(56,W*.17), cx=W/2, cy=H*.42;
+  const half=H*.36;
+  const R=Math.min(H-cy-8, (cx-tapeW-16)/0.72);
+  const ppd=R/13;                                // pixels per degree of pitch on the ladder
+  const lean=S.lean, pitch=S.pitch;
+  const leanCol=Math.abs(lean)>30?WARN:COL;
+
+  /* pitch ladder + horizon (rolls opposite to the phone, like a jet's HUD) */
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx,cy,R*.9,0,Math.PI*2); ctx.clip();
+  ctx.beginPath(); ctx.rect(0,0,W,cy+R*.45); ctx.clip();
+  ctx.translate(cx,cy); ctx.rotate(-lean*D2R); ctx.translate(0,pitch*ppd);
+  ctx.strokeStyle=COL; ctx.fillStyle=COL; ctx.lineCap="round";
+  const gap=R*.16;
+  ctx.lineWidth=3.5;
+  ctx.beginPath(); ctx.moveTo(-R*1.2,0); ctx.lineTo(-gap,0); ctx.moveTo(gap,0); ctx.lineTo(R*1.2,0); ctx.stroke();
+  ctx.font=font(Math.max(12,R*.09)); ctx.textBaseline="middle";
+  for(let d=-30;d<=30;d+=5){
+    if(!d) continue;
+    const y=-d*ppd, len=d%10?R*.18:R*.32, tick=(d>0?1:-1)*R*.05;
+    ctx.lineWidth=d%10?2:2.5;
+    ctx.setLineDash(d<0?[8,6]:[]);
+    ctx.beginPath();
+    ctx.moveTo(-gap,y+tick); ctx.lineTo(-gap,y); ctx.lineTo(-gap-len,y);
+    ctx.moveTo(gap,y+tick);  ctx.lineTo(gap,y);  ctx.lineTo(gap+len,y);
+    ctx.stroke();
+    if(d%10===0){
+      ctx.textAlign="right"; ctx.fillText(Math.abs(d), -gap-len-6, y);
+      ctx.textAlign="left";  ctx.fillText(Math.abs(d),  gap+len+6, y);
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  /* fixed scooter symbol */
+  ctx.strokeStyle=TXT; ctx.lineWidth=4; ctx.lineCap="round"; ctx.lineJoin="round";
+  const s=R*.11;
+  ctx.beginPath();
+  ctx.moveTo(cx-s*3,cy); ctx.lineTo(cx-s*1.2,cy); ctx.lineTo(cx-s*.6,cy+s*.8); ctx.lineTo(cx,cy);
+  ctx.lineTo(cx+s*.6,cy+s*.8); ctx.lineTo(cx+s*1.2,cy); ctx.lineTo(cx+s*3,cy);
+  ctx.stroke();
+
+  /* lean (roll) scale – arc at the bottom, pointer swings toward the side you lean */
+  ctx.strokeStyle=COL; ctx.fillStyle=COL; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.arc(cx,cy,R,(90-45)*D2R,(90+45)*D2R); ctx.stroke();
+  ctx.font=font(Math.max(11,R*.075)); ctx.textAlign="center"; ctx.textBaseline="middle";
+  [-45,-30,-20,-10,0,10,20,30,45].forEach(a=>{
+    const ang=(90-a)*D2R, big=a%30===0||Math.abs(a)===45;
+    const r1=R, r2=R-(big?R*.09:R*.05);
+    ctx.lineWidth=big?3:2;
+    ctx.beginPath(); ctx.moveTo(cx+Math.cos(ang)*r1,cy+Math.sin(ang)*r1); ctx.lineTo(cx+Math.cos(ang)*r2,cy+Math.sin(ang)*r2); ctx.stroke();
+    if(a && (Math.abs(a)===20||Math.abs(a)===45)){
+      const rt=R-R*.17; ctx.fillText(Math.abs(a), cx+Math.cos(ang)*rt, cy+Math.sin(ang)*rt);
+    }
+  });
+  const la=(90-Math.max(-50,Math.min(50,lean)))*D2R, pr=R+3;
+  ctx.fillStyle=leanCol;
+  ctx.beginPath();
+  ctx.moveTo(cx+Math.cos(la)*pr, cy+Math.sin(la)*pr);
+  const pl=R*.11, pw=R*.06, nx=Math.cos(la), ny=Math.sin(la), tx=-ny, ty=nx;
+  ctx.lineTo(cx+nx*(pr+pl)+tx*pw, cy+ny*(pr+pl)+ty*pw);
+  ctx.lineTo(cx+nx*(pr+pl)-tx*pw, cy+ny*(pr+pl)-ty*pw);
+  ctx.closePath(); ctx.fill();
+  // digital lean readout
+  const la1=Math.round(Math.abs(lean));
+  ctx.font=font(Math.max(18,R*.16),800); ctx.fillStyle=leanCol;
+  ctx.fillText(la1===0?"0°":(la1+"° "+(lean>0?"R":"L")), cx, cy+R*.62);
+  ctx.font=font(Math.max(10,R*.065)); ctx.fillStyle=COL;
+  ctx.fillText("LEAN", cx, cy+R*.78);
+
+  /* side tapes */
+  const grade=Math.tan(pitch*D2R)*100;
+  drawTape({x:4, w:tapeW, side:'L', cy, half, value:pitch, span:15, minor:1,
+    isLabel:k=>k%5===0, fmt:v=>Math.round(v), title:"PITCH °",
+    boxText:(pitch>=0?"+":"")+pitch.toFixed(1), sub:(grade>=0?"+":"")+Math.round(grade)+"% GRADE"});
+  const a=S.aF, aCol=a<-.3?WARN:null;
+  drawTape({x:W-tapeW-4, w:tapeW, side:'R', cy, half, value:a, span:.6, minor:.05,
+    isLabel:k=>k%4===0, fmt:v=>(Math.abs(v)<.001?"0":v.toFixed(1)), title:"ACCEL G",
+    boxText:(a>=0?"+":"")+a.toFixed(2), color:aCol, sub:a<-0.05?"BRAKING":(a>0.05?"ACCEL":"")});
+}
+
+/* ---------- text readouts + loop ---------- */
+let lastText=0;
+function loop(now){
+  requestAnimationFrame(loop);
+  drawHUD();
+  if(now-lastText<150) return; lastText=now;
+  const stale = S.speed==null || now-S.lastFixT>4000;
+  const sp=$("speed");
+  sp.textContent = stale? "--" : Math.round(S.speed);
+  sp.classList.toggle("stale",stale);
+  const acc=S.gpsAcc, dotEl=$("gpsDot");
+  if(stale){ dotEl.style.background="var(--bad)"; if(!/DENIED|ERR|NO/.test($("gpsTxt").textContent)) $("gpsTxt").textContent= S.speed==null?"GPS SEARCH":"GPS LOST"; }
+  else{ dotEl.style.background = acc<=10?"var(--hud)":acc<=25?"var(--warn)":"var(--bad)"; $("gpsTxt").textContent="GPS ±"+Math.round(acc)+"m"; }
+  $("zState").textContent = S.zeroedThisRun? "TILT ZEROED" : "TILT NOT ZEROED";
+  $("zState").style.color = S.zeroedThisRun? "" : "var(--warn)";
+  $("zero").classList.toggle("need",!S.zeroedThisRun);
+  $("zSub").textContent = S.zeroedThisRun? "HOLD TO RE-LEVEL TILT" : "HOLD TO LEVEL TILT";
+  $("mSpd").innerHTML = S.maxSpd.toFixed(1);
+  $("mAcc").innerHTML = (S.maxAcc>=.005?"+":"")+S.maxAcc.toFixed(2)+"<small>g</small>";
+  $("mBrk").innerHTML = (S.maxBrk>=.005?"−":"")+S.maxBrk.toFixed(2)+"<small>g</small>";
+  const d=new Date(); $("clock").textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+}
+requestAnimationFrame(loop);
+
+if("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
